@@ -6,6 +6,7 @@ Cluster waste calculation using Python
 import argparse
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Optional, Tuple
@@ -59,12 +60,20 @@ class ResourceParser:
         if not mem_str or mem_str == "0":
             return 0.0
 
+        # Binary IEC units (Ki, Mi, Gi)
         if mem_str.endswith("Ki"):
             return float(mem_str[:-2]) / 1_048_576  # Ki to GB
         elif mem_str.endswith("Mi"):
             return float(mem_str[:-2]) / 1_024  # Mi to GB
         elif mem_str.endswith("Gi"):
             return float(mem_str[:-2])  # Gi to GB
+        # Decimal SI units (K, M, G)
+        elif mem_str.endswith("G"):
+            return float(mem_str[:-1]) / 1.073741824  # G to GB (GiB)
+        elif mem_str.endswith("M"):
+            return float(mem_str[:-1]) / 1073.741824  # M to GB (GiB)
+        elif mem_str.endswith("K"):
+            return float(mem_str[:-1]) / 1_073_741.824  # K to GB (GiB)
         elif mem_str.isdigit():
             return float(mem_str) / 1_073_741_824  # bytes to GB
         else:
@@ -128,6 +137,10 @@ class KubernetesClient:
             requests = {}
 
             for pod in pods.get("items", []):
+                phase = pod.get("status", {}).get("phase", "")
+                if phase != "Running":
+                    continue
+
                 pod_key = f"{pod['metadata']['namespace']}/{pod['metadata']['name']}"
 
                 total_cpu_req = 0.0
@@ -256,7 +269,7 @@ class WasteReporter:
                 "waste": waste
             }
             for workload, waste in workload_waste.items()
-            if waste.cost_waste > 0.01
+            if waste.cost_waste > 0.001
             and not workload.startswith("kube-system/")
             and not workload.startswith("thoras/")
         ]
@@ -322,7 +335,7 @@ class WasteReporter:
                 "waste": waste
             }
             for workload, waste in workload_waste.items()
-            if waste.cost_waste > 0.01
+            if waste.cost_waste > 0.001
             and not workload.startswith("kube-system/")
             and not workload.startswith("thoras/")
         ]
@@ -771,9 +784,18 @@ class ClusterWasteAnalyzer:
             )
 
 
+class HelpOnErrorParser(argparse.ArgumentParser):
+    """ArgumentParser that prints full help on any argument error"""
+
+    def error(self, message):
+        sys.stderr.write(f"error: {message}\n\n")
+        self.print_help(sys.stderr)
+        sys.exit(2)
+
+
 def parse_args():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(
+    parser = HelpOnErrorParser(
         description="Calculate Kubernetes cluster resource waste and costs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
